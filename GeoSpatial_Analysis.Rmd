@@ -1,0 +1,227 @@
+---
+title: "Australian Marriage Law Postal Vote 2017 - Participation"
+author: "Carol M Paipa"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Australian Marriage Law Postal Vote 2017 - Participation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+  
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+The goal of this document is to provide a basic introduction to plotting graphs and geospacial graph plotting in the statiscial programming language R. It will also demonstrate pulling data from the internet using `rsdmx` and `httr`, as well as some very basic data transformation and fun visualisation functions.
+
+## Objective
+
+This document aims to complete the following tasks using R packages to extract data from the internet, perform some data transformations, perform some basic data visualisations to gleam some insights from the sample data, and finally to have a play around with GeoSpacial mapping techniques for fun. 
+
+The **Australian Bureau of Statisics** is a huge wealth of dataset across many industries, sectors, the economy and your every day Australians. To keep things simple (this is my first time after all), I will use an aggregated dataset with a few key categorical and response variables we can interrogate.
+
+#![Caption](images/ABS.PNG)
+
+Step 1 is to load these packages:
+
+```{r install1, eval=FALSE, echo=TRUE}
+#install.packages("tidyverse", repos="http://cran.csiro.au/")
+install.packages("micromap", repos="http://cran.csiro.au/")
+install.packages("dplyr", repos="http://cran.csiro.au/")
+install.packages("ggmap", repos="http://cran.csiro.au/")
+install.packages("httr", repos="http://cran.csiro.au/")
+install.packages("rsdmx", repos="http://cran.csiro.au/")
+```
+
+```{r install2, include=FALSE}
+#install.packages("tidyverse", repos="http://cran.csiro.au/")
+install.packages("micromap", repos="http://cran.csiro.au/")
+install.packages("dplyr", repos="http://cran.csiro.au/")
+install.packages("ggmap", repos="http://cran.csiro.au/")
+install.packages("httr", repos="http://cran.csiro.au/")
+install.packages("rsdmx", repos="http://cran.csiro.au/")
+```
+
+Step 2 is to load the library files:
+  
+```{r loadlib1, eval=FALSE, echo=TRUE}
+library(tidyverse)
+library(dplyr)
+library(httr)
+library(ggmap)
+library(rsdmx)
+library(micromap)
+```
+
+```{r loadlib2, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(httr)
+library(ggmap)
+library(rsdmx)
+library(micromap)
+```
+
+## Read datasets
+
+We are using the Statistical Data and Metadata Exchange (SDMX) framework, to read a dataset from a remote data source from the ABS website, using the full URL complete request method. For more detailed information on the SDMX framework, visit [rsdmx-vignettes-link](<https://cran.r-project.org/web/packages/rsdmx/vignettes/quickstart.html>) 
+
+The dataset we are requesting is the **Australian Marriage Law Postal Survey 2017** (ie: [Same Sex Marriage vote](<http://stat.data.abs.gov.au/index.aspx?queryid=793>). We need to construct the full URL, including the dataset name **AMLPS_PART_2017**, and ideally a Start and End Time, to limit the amount of data only to what we need. We will save the results into a data frame named `"stats"`.
+
+```{r}
+#REMOTE DATASET FROM THE AUS GOVT ABS
+#-------------------------------------------
+myUrl <- "http://stat.data.abs.gov.au/restsdmx/sdmx.ashx/GetData/AMLPS_PART_2017/all?startTime=2017&endTime=2017"
+dataset <- readSDMX(myUrl)
+stats <- as.data.frame(dataset)
+```
+
+## Data Transformation
+
+There are 23,373 observations. We can exclude some of these observations as they hinder our analysis, which also helps us learn about data transformation.
+
+We are going to filter out the data that we do not require, based on the following:
+
+*	`MEASURE=="PART_TOT"` we will only evaluate the Participation Total for now
+*	`SEX_ABS=="1" | SEX_ABS=="2"` we only wish to look at Male or Female (there is a 3rd category, Person)
+*	`AEC_FED_2017>="0" & AEC_FED_2017<="9"` will be limited to Australian States only (not the Total count)
+
+
+```{r}
+#Filter out only required data using subset()
+#---------------------------------------------
+statsSub<-subset(stats,MEASURE=="PART_TOT")
+statsSub1<-subset(statsSub,SEX_ABS=="1" | SEX_ABS=="2")
+statsSub2<-subset(statsSub1,AGE<="A81")
+statsSub3<-subset(statsSub2,AEC_FED_2017>="0" & AEC_FED_2017<="9")
+statsSub4<-subset(statsSub3,REGIONTYPE=="STE")
+```
+
+We are going to add some improved category columns for graph labelling:
+
+*	Gender :: convert 1 and 2, to Male and Female
+*	Age Group :: convert to numeric, this helps us plot our X-Axis on some graphs
+*	State No :: assign ABS states to a numeric ID, that will link to our GeoSpacial data points source data
+
+```{r}
+#Add extra meaningful columns for our graph labels
+#-------------------------------------------------
+statsSub4<-mutate(statsSub4, state_no = as.numeric(as.character(AEC_FED_2017))) 
+statsSub4<-mutate(statsSub4, Gender = ifelse(SEX_ABS=="1", "Male", "Female")) 
+statsSub4<-mutate(statsSub4, age_group = ifelse(AGE=="1819", 18, ifelse(AGE=="8599", 90, ifelse(AGE=="AGE_NFD", 0, as.numeric(as.character(right(AGE,2)))))) )
+glimpse(statsSub4)
+```
+
+We need to load in one more dataset, a very basic latitude and longitude of each Australian State, that we can link up with our ABS dataset, via the column state_no. We will use the `httr` framwork to read this CSV.
+
+```{r}
+myUrl <- "https://raw.githubusercontent.com/CazMayhem/STDS-Work/master/auspoints.csv"
+auspoints <- read_csv(myUrl)
+glimpse(auspoints)
+```
+
+We will combine the ABS dataset with the auspoints file, which will provide latitude and longitude co-ordinates for each state, that will allow us to plot our ABS data on a [Google Map](<https://www.rdocumentation.org/packages/ggmap/versions/2.6.1>).
+
+```{r}
+statsGeo <- merge(x = statsSub4, y = auspoints, by = "state_no", all.x = TRUE)
+```
+
+## Data visualisation
+
+Now all the data is **loaded, transformed and ready** to perform some statistical visualisation analysis on via Graphs. 
+
+We will be using Rs `ggplot2` based on the grammar of graphics, which is extensively detailed in [layered-grammar.pdf](<http://vita.had.co.nz/papers/layered-grammar.pdf>)
+
+`geom()` is used to create scatterplots, below are comparing one continuous (total reponses) and one categorical (by state).
+
+`+facet_wrap()` allows us to split the data across 2 scatterplots, which we will split by Gender.
+You can see below that there was a higher number of responses by female for the larger states (NSW, VIC, QLD), but relatively the same across the smaller population states (ACT, NT, TAS).
+
+`+Labs()` allows us to add more meaningful labels to the graphs, if the source datas naming conventions are not user friendly.
+
+```{r fig1, fig.height = 4, fig.width = 7}
+# Graph 1 original column headings, no labelling
+#------------------------------------------------
+ggplot(data = statsGeo) + 
+  geom_point(mapping = aes(x = AEC_FED_2017, y = obsValue)) + 
+  facet_wrap(~ SEX_ABS, ncol = 2)
+```
+
+The above graph has pretty meaningless labelling as you can't really observe anything.
+We can vastly improve on this, using our GeoSpacial labelling for States, and showing descriptive categories for Gender.
+
+```{r fig2, fig.height = 4, fig.width = 7}
+#Graph 2 using more descriptive categories (Gender, State) 
+#----------------------------------------------------------
+ggplot(data = statsGeo) + 
+  geom_point(mapping = aes(x = state, y = obsValue)) + 
+  facet_wrap(~ Gender, ncol = 2)
+```
+
+Instead of a **scatterplot** graph, we could use a **bar graph** instead, as this dataset is agreggated, so it would be good just to get an idea of total numbers by Gender, Age and State, with some pretty cool looking aesthetics.
+
+The additional aesthetics below, are specified in the `geom_bar` properties:
+
+* `fill = Gender` :: fills the bar with different colours
+* `position = "dodge"` :: puts the bars beside each other instead of stacking
+* `stat = "identity"` :: the default metric for `geom_bar()` is count, so this allows the graph to show actual figures, which I in this case is helpful for our dataset visually.
+
+```{r fig3, fig.height = 4, fig.width = 7}
+#Graph 3 bar graph with nice aesthetics
+#----------------------------------------------------------
+ggplot(data = statsGeo) + 
+  geom_bar(mapping = aes(x = state, y = obsValue, fill = Gender), stat = "identity", position = "dodge") +
+  labs(title ="Total Responses by State and Gender", x = "State", y = "Total Responses")
+```
+
+The next graph shows two **categorical variables**, Age and State, this time using bar stacking to show the proportion of each state per age group. You can see NSW has by far the biggest response rate for the Marriage Law Survey, and ACT is basically not visible with this type of graph the response rate was so small.
+
+```{r fig4, fig.height = 4, fig.width = 7}
+#Graph 4 bar graph with nice aesthetics
+#----------------------------------------------------------
+ggplot(data = statsGeo) + 
+  geom_bar(mapping = aes(x = age_group, y = obsValue, fill = state), stat = "identity") +
+  labs(title ="Total Responses by Age and State", x = "Age", y = "Total Responses")
+```
+
+**Finally**, one last graph for a bit of fun, plotting State averages by Gender on a Google Map. We will use the Google `maps` library, plus the normal `geom` functions, with `geom_text` to label the map, and `facet_wrap` to split Males and Females across 2 maps.
+
+```{r fig5, fig.height = 4, fig.width = 7}
+#Final Graph - Google Map showing Particpation % by State
+#----------------------------------------------------------
+#Participation % - need PART_PCT values
+statsMap<-subset(stats,MEASURE=="PART_PCT")
+statsMap1<-subset(statsMap,SEX_ABS=="1" | SEX_ABS=="2")
+statsMap2<-subset(statsMap1,AGE>="A19" & AGE<="A81")
+statsMap3<-subset(statsMap2,AEC_FED_2017>="0" & AEC_FED_2017<="9")
+statsMap4<-subset(statsMap3,REGIONTYPE=="STE")
+#Add new categories for labelling
+statsMap4<-mutate(statsMap4, state_no = as.numeric(as.character(AEC_FED_2017))) 
+statsMap4<-mutate(statsMap4, Gender = ifelse(SEX_ABS=="1", "Male", "Female")) 
+#Merge ABS Stats with AusPoints lat + long
+statsGeo <- merge(x = statsMap4, y = auspoints, by = "state_no", all.x = TRUE)
+#Summary of stats by State, Gender, Lat, Long
+statsMapSum <- group_by(statsGeo, state, Gender, lat, lon, sitenum)
+ssMap <- summarise(statsMapSum, obsValue=mean(obsValue))
+#Google Map plotting + labelling
+map <- get_map(location = 'Australia', zoom = 4)
+ggmap(map) + 
+  geom_point(data = ssMap, aes(x=lon,y=lat,size=sitenum), alpha=0, show.legend = FALSE) + 
+  geom_text(data = ssMap, aes(x = lon, y = lat, label = round(obsValue,digits = 1)), size = 4)  +
+  labs(title ="Participation Female v's Male", x = "longitude", y = "latitude") +
+  facet_wrap(~ Gender, ncol = 2)
+```
+
+## References
+
+* Australian Bureau of Stastistics: http://stat.data.abs.gov.au 
+* CSV data available from: https://github.com/CazMayhem/STDS-Work 
+* Plotting for Google Maps: https://www.rdocumentation.org/packages/ggmap/versions/2.6.1
+* Importing data into R: https://cran.r-project.org/web/packages/rsdmx/vignettes/quickstart.html
+* Basic Graph Plotting: http://r4ds.had.co.nz/data-visualisation.html
+* Transforming Data: http://r4ds.had.co.nz/transform.html
+* Markdown: https://ourcodingclub.github.io/2016/11/24/rmarkdown-1.html
